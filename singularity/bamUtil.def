@@ -1,5 +1,0 @@
-bootstrap: docker
-from: quay.io/biocontainers/bamutil:1.0.15--h5b5514e_2
-
-%runscript
-umask 007 && "$@"

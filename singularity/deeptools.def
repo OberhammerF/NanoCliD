@@ -1,6 +1,0 @@
-bootstrap: docker
-from: quay.io/biocontainers/deeptools:3.5.1--py_0
-
-%runscript
-umask 007 && "$@"
-

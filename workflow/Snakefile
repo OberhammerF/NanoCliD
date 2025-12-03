@@ -16,7 +16,10 @@ if config["analysis"] == "multipleInjections":
 RES_FOLDER = os.path.join(config["output_dir"], config["run"])
 
 LOG_PATH = os.path.join(config["output_dir"], config["run"], "logs/")
-CONTAINERS_PATH = workflow.singularity_prefix
+#CONTAINERS_PATH = workflow.singularity_prefix
+CONTAINERS_PATH = getattr(workflow, "singularity_prefix", None) \
+    or os.environ.get("SINGULARITY_PREFIX") \
+    or config.get("singularity-prefix", "")
 
 if "shbli" in hostname or "node" in hostname:
     LOG_CLUSTER_PATH=os.path.join(config["output_dir"], config["run"], "logs_cluster/")
