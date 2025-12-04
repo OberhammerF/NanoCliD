@@ -262,10 +262,18 @@ class NanoClid:
         return configYaml
 
     def writeConfig(self, dico, path):
+        """Debug version to see what's being written"""
         if os.path.basename(path) == "config.yaml":
             with open(path, "w") as file:
-                yaml.dump(dico, file, sort_keys = False)
+                yaml.dump(dico, file, sort_keys=False)
         else:
+            # Add debug output
+            print(f"DEBUG: Writing config to {path}")
+            for key in dico.keys():
+                val = dico[key]
+                if not isinstance(val, dict) and not isinstance(val, list) and not isinstance(val, bool) and not isinstance(val, int):
+                    print(f"  {key}: {type(val).__name__} = {repr(val)[:100]}")
+            
             f = open(path, "w")
             for key in dico.keys():
                 if type(dico[key]) != dict:
@@ -281,18 +289,163 @@ class NanoClid:
             f.close()
 
     def __updateConfig(self, config):
-         # make sure required top-level dicts exist
-        config.setdefault("dorado", {})
-        config.setdefault("guppy", {})
-        config.setdefault("minimap2", {})
-        config.setdefault("wildcards", {})
-        config.setdefault("snpEff", {})
+        # Ensure all tool sections are dicts (template may have them as strings or missing)
+        tool_sections = [
+            "dorado", "guppy", "minimap2", "slow5tools", "slow5_merge", "bluecrab",
+            "f5c", "f5c_call_methylation", "samtools_sort", "samtools_merge",
+            "bedtools", "pod5tools", "nanoplot", "mosdepth", "samtools_stats",
+            "clair3", "pepper", "nanocaller", "sniffles", "cuteSV", "svim", "nanovar",
+            "annotSV", "combineVariants", "bioInfoCliTools", "R", "cnv", "circos",
+            "computeQC", "concatSV", "snpEff", "wildcards"
+        ]
+        for section in tool_sections:
+            if not isinstance(config.get(section), dict):
+                config[section] = {}
 
-        # basic flags
+        # Set minimal defaults for all tools
+        config["dorado"].setdefault("parameters", "")
+        config["dorado"].setdefault("model", config.get("dorado", {}).get("model", ""))
+        config["dorado"].setdefault("sif", "dorado.sif")
+        config["dorado"].setdefault("demux", "")
+        
+        config["guppy"].setdefault("parameters", config.get("guppy", {}).get("parameters", ""))
+        config["guppy"].setdefault("parameters_standalone", config.get("guppy", {}).get("parameters_standalone", ""))
+        config["guppy"].setdefault("sif", "guppy.sif")
+        
+        config["minimap2"].setdefault("mmi", "")
+        config["minimap2"].setdefault("parameters", "")
+        config["minimap2"].setdefault("sif", "minimap2.sif")
+        config["minimap2"].setdefault("cn", "")
+        
+        config["wildcards"].setdefault("samples", getattr(self, "samples", []))
+        config["wildcards"].setdefault("injections", getattr(self, "injections", []))
+        config["wildcards"].setdefault("mergedSamples", getattr(self, "mergedSamples", []))
+        config["wildcards"].setdefault("run", [getattr(self, "run", "")])
+
+        config["slow5tools"].setdefault("parameters", "")
+        config["slow5tools"].setdefault("sif", "slow5tools.sif")
+        
+        config["slow5_merge"].setdefault("parameters", "")
+        
+        config["bluecrab"].setdefault("parameters", "")
+        config["bluecrab"].setdefault("sif", "bluecrab.sif")
+        
+        config["f5c"].setdefault("bin", "f5c")
+        config["f5c"].setdefault("parameters", "")
+        config["f5c"].setdefault("sif", "f5c.sif")
+        
+        config["f5c_call_methylation"].setdefault("parameters", "")
+        
+        config["samtools_sort"].setdefault("parameters", "")
+        config["samtools_sort"].setdefault("sif", "samtools.sif")
+        
+        config["samtools_merge"].setdefault("parameters", "")
+        config["samtools_merge"].setdefault("sif", "samtools.sif")
+        
+        config["bedtools"].setdefault("sif", "bedtools.sif")
+        
+        config["pod5tools"].setdefault("sif", "pod5tools.sif")
+
+        config["nanoplot"].setdefault("parameters", "")
+        config["nanoplot"].setdefault("script", "")
+        config["nanoplot"].setdefault("sif", "nanoplot.sif")
+
+        config["mosdepth"].setdefault("parameters", "")
+        config["mosdepth"].setdefault("sif", "mosdepth.sif")
+
+        config["samtools_stats"].setdefault("parameters", "")
+
+        if "calculate_methylation_frequency" not in config:
+            config["calculate_methylation_frequency"] = "-c 2.5 -s"
+
+        config["clair3"].setdefault("parameters", "")
+        config["clair3"].setdefault("sif", "clair3.sif")
+        config["clair3"].setdefault("threads", 1)
+
+        config["pepper"].setdefault("sif", "pepper.sif")
+        config["pepper"].setdefault("threads", 1)
+
+        config["nanocaller"].setdefault("parameters", "")
+        config["nanocaller"].setdefault("script", "")
+        config["nanocaller"].setdefault("sif", "nanocaller.sif")
+        config["nanocaller"].setdefault("threads", 1)
+
+        config["sniffles"].setdefault("parameters", "")
+        config["sniffles"].setdefault("sif", "sniffles.sif")
+
+        config["cuteSV"].setdefault("parameters", "")
+        config["cuteSV"].setdefault("sif", "cuteSV.sif")
+        config["cuteSV"].setdefault("threads", 1)
+
+        config["svim"].setdefault("parameters", "")
+        config["svim"].setdefault("qual", "")
+        config["svim"].setdefault("sif", "svim.sif")
+
+        config["nanovar"].setdefault("parameters", "")
+        config["nanovar"].setdefault("sif", "nanovar.sif")
+        config["nanovar"].setdefault("threads", 1)
+
+        config["annotSV"].setdefault("parameters", "")
+        config["annotSV"].setdefault("sif", "annotSV.sif")
+
+        config["combineVariants"].setdefault("javaParameters", "")
+        config["combineVariants"].setdefault("parameters", "")
+        config["combineVariants"].setdefault("sif", "combineVariants.sif")
+
+        config["bioInfoCliTools"].setdefault("sif", "bioInfoCliTools.sif")
+
+        config["R"].setdefault("sif", "R.sif")
+
+        config["cnv"].setdefault("bigwigsif", "")
+        config["cnv"].setdefault("brain_bed", "")
+        config["cnv"].setdefault("brain_bed_5mb", "")
+        config["cnv"].setdefault("cnvfrombamsif", "")
+        config["cnv"].setdefault("deeptoolssif", "")
+        config["cnv"].setdefault("effectiveGenomeSize", "")
+        config["cnv"].setdefault("genome_subsampling", "")
+        config["cnv"].setdefault("script", "")
+        config["cnv"].setdefault("threads", 1)
+
+        config["circos"].setdefault("chromosome", "")
+        config["circos"].setdefault("cytobande", "")
+        config["circos"].setdefault("geneList", "")
+        config["circos"].setdefault("gtf", "")
+        config["circos"].setdefault("script", "")
+
+        config["computeQC"].setdefault("script", "")
+
+        config["concatSV"].setdefault("script", "")
+
+        config["snpEff"].setdefault("javaParameters", "-Xmx8G")
+        config["snpEff"].setdefault("parameters", "")
+        config["snpEff"].setdefault("sif", "snpEff.sif")
+
+        # dataDir must be a dict with genome versions as keys (required by snv_calling.snk line 185)
+        # The Snakemake file does: config["snpEff"]["dataDir"]["hg19"]
+        if "dataDir" not in config["snpEff"]:
+            snpeff_path = getattr(self, "snpEffDir", "")
+            config["snpEff"]["dataDir"] = {
+                "hg19": snpeff_path,
+                "hg38": snpeff_path
+            }
+        elif isinstance(config["snpEff"]["dataDir"], str):
+            # Convert string to dict format
+            path = config["snpEff"]["dataDir"]
+            config["snpEff"]["dataDir"] = {
+                "hg19": path,
+                "hg38": path
+            }
+        elif isinstance(config["snpEff"]["dataDir"], dict):
+            # Already a dict - ensure required genome versions exist
+            snpeff_path = getattr(self, "snpEffDir", "")
+            config["snpEff"]["dataDir"].setdefault("hg19", snpeff_path)
+            config["snpEff"]["dataDir"].setdefault("hg38", snpeff_path)
+
+        # Basic flags
         config["analysis"] = getattr(self, "analysis", "")
         config["demultiplexing"] = getattr(self, "demultiplexing", False)
 
-        # flowcell/model strings (only if flowCellType available)
+        # Flowcell/model strings (only if flowCellType available)
         flow = getattr(self, "flowCellType", "")
         seq = getattr(self, "sequencer", "")
         if config["dorado"].get("model"):
@@ -301,7 +454,6 @@ class NanoClid:
             else:
                 config["dorado"]["model"] = config["dorado"]["model"].replace("FLOWCELL", f"dna_{flow}_e8_hac@v3.3")
         else:
-            # fallback default if template missing
             config["dorado"]["model"] = f"dna_{flow}_e8_hac@v3.3" if flow else ""
 
         if config["guppy"].get("parameters_standalone"):
@@ -313,43 +465,43 @@ class NanoClid:
         else:
             config["guppy"]["parameters_standalone"] = ""
 
-        # demultiplexing params
+        # Demultiplexing params
         if getattr(self, "demultiplexing", False):
             bk = getattr(self, "barcodingKits", "")
             config["dorado"]["demux"] = f'--emit-fastq --kit-name "{bk}"'
             config["guppy"]["parameters_standalone"] = f'{config["guppy"]["parameters_standalone"]} --barcode_kits "{bk}"'
 
-        # basic run/ref settings
+        # Basic run/ref settings
         config["flowCellType"] = flow.split(".")[0] if flow else ""
         config["bed"] = getattr(self, "bed", "")
         config["sampleSheet"] = getattr(self, "sampleSheet", "")
         config["run"] = getattr(self, "run", "")
         config["genome_version"] = getattr(self, "genomeVersion", "")
 
-        # genome / minimap2 paths (only set if refDir and genomeVersion present and files exist)
+        # Genome / minimap2 paths
         refdir = getattr(self, "refDir", "")
         gv = getattr(self, "genomeVersion", "")
         if refdir and gv:
-            fasta_f = os.path.join(refdir, f"{gv}.fasta")
-            fasta_a = os.path.join(refdir, f"{gv}.fa")
+            # Convert to absolute path so Snakemake can find files from any working directory
+            refdir_abs = os.path.abspath(refdir)
+            
+            # Check which FASTA format exists
+            fasta_f = os.path.join(refdir_abs, f"{gv}.fasta")
+            fasta_a = os.path.join(refdir_abs, f"{gv}.fa")
             if os.path.exists(fasta_f):
                 config["genome"] = fasta_f
             elif os.path.exists(fasta_a):
                 config["genome"] = fasta_a
             else:
                 config["genome"] = ""
-            config["genomeFile"] = os.path.join(refdir, f"{gv}.genome")
-            config["minimap2"]["mmi"] = f"{refdir}/{gv}.mmi"
+            
+            # Set genome file and minimap2 index with absolute paths
+            config["genomeFile"] = os.path.join(refdir_abs, f"{gv}.genome")
+            config["minimap2"]["mmi"] = os.path.join(refdir_abs, f"{gv}.mmi")
         else:
             config["genome"] = ""
             config["genomeFile"] = ""
             config["minimap2"]["mmi"] = ""
-
-        # wildcards / samples
-        config["wildcards"]["samples"] = getattr(self, "samples", [])
-        config["wildcards"]["mergedSamples"] = getattr(self, "mergedSamples", [])
-        config["wildcards"]["run"] = [getattr(self, "run", "")]
-        config["wildcards"]["injections"] = getattr(self, "injections", [])
 
         config["samplesToMerge"] = getattr(self, "samplesToMerge", {})
         config["combinaison"] = getattr(self, "combinaison", "")
@@ -360,9 +512,10 @@ class NanoClid:
         config["reportFiles"] = getattr(self, "reportFiles", {})
         config["fast5Dir"] = getattr(self, "fast5Paths", {})
 
-        if not curieNetwork:
-            config.setdefault("snpEff", {})
-            config["snpEff"]["dataDir"] = self.snpEffDir
+        # Apply snpEffDir for non-Curie networks (update dict values, don't replace dict)
+        if not curieNetwork and hasattr(self, "snpEffDir") and self.snpEffDir:
+            config["snpEff"]["dataDir"]["hg19"] = self.snpEffDir
+            config["snpEff"]["dataDir"]["hg38"] = self.snpEffDir
 
         config["fromBlow5"] = getattr(self, "fromBlow5", "'no'")
         config["fromFast5"] = getattr(self, "fromFast5", "'no'")
@@ -383,6 +536,19 @@ class NanoClid:
         os.makedirs(folder, exist_ok=True)
         configFile = f"{run}.yaml"
         config = self.loadConfig(template)
+        # Remove any tool sections from template that are not dicts (force __updateConfig to set them)
+        tool_sections = [
+            "dorado", "guppy", "minimap2", "slow5tools", "slow5_merge", "bluecrab",
+            "f5c", "f5c_call_methylation", "samtools_sort", "samtools_merge",
+            "bedtools", "pod5tools", "nanoplot", "mosdepth", "samtools_stats",
+            "clair3", "pepper", "nanocaller", "sniffles", "cuteSV", "svim", "nanovar",
+            "annotSV", "combineVariants", "bioInfoCliTools", "R", "cnv", "circos",
+            "computeQC", "concatSV", "snpEff"
+        ]
+        for section in tool_sections:
+            if section in config and not isinstance(config[section], dict):
+                del config[section]  # remove bad entries, __updateConfig will recreate them
+                config[section] = {}
         config = self.__updateConfig(config)
         self.writeConfig(config, os.path.join(folder, configFile))
         return os.path.join(folder, configFile)
