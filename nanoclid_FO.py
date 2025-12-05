@@ -21,7 +21,7 @@ except:
 class NanoClid:
     _DEFAULT_P_DIR = {"abacus" : "/mnt/beegfs/EH/pipelines/prod/.p", "calcsub" : "/data/bioinfo-clinique-public/prod/.p", "standalone" : "/data/bioinfo-clinique-public/prod/.p"}
 
-    def __init__(self, inputFolder=None, bedDir=None, bedFile=None, run=None, outDir=None, dryRun=None, genomeVersion=None, until=None, samples="", outTemplate=None, snpEffDir=None, copyToTransverse=None, copyToWorkspace=None, runOnCluster=None, transverseFolder = None, sampleSheet = None, refDir = None, hostName = None, snakemakeBin = None, email = "", profile = None, queue = None):
+    def __init__(self, inputFolder=None, bedDir=None, bedFile=None, run=None, outDir=None, dryRun=None, genomeVersion=None, until=None, samples="", outTemplate=None, snpEffDir=None, copyToTransverse=None, copyToWorkspace=None, runOnCluster=None, transverseFolder = None, sampleSheet = None, refDir = None, hostName = None, snakemakeBin = None, email = "", profile = None, queue = None, containersFolder = None):
         self.inputFolder = inputFolder
         self.bedDir = bedDir
         self.bedFile = bedFile
@@ -34,6 +34,7 @@ class NanoClid:
         self.outTemplate = outTemplate
         self.gitDir = os.path.dirname(os.path.realpath(__file__))
         self.snpEffDir = snpEffDir
+        self.containersFolder = containersFolder if containersFolder else os.path.join(self.gitDir, "containers")
         if snakemakeBin is None and profile is None and curieNetwork:
             self.snakemakeBin, profile = curieFunctions._setSnakemakeBinAndProfile()
         else:
@@ -478,6 +479,14 @@ class NanoClid:
         config["run"] = getattr(self, "run", "")
         config["genome_version"] = getattr(self, "genomeVersion", "")
 
+        # Set containers_path to the singularity directory
+        if "containers_path" not in config or not config["containers_path"]:
+            config["containers_path"] = self.containersFolder + "/"
+        else:
+            # Ensure trailing slash
+            if not config["containers_path"].endswith("/"):
+                config["containers_path"] = config["containers_path"] + "/"
+
         # Genome / minimap2 paths
         refdir = getattr(self, "refDir", "")
         gv = getattr(self, "genomeVersion", "")
@@ -847,6 +856,7 @@ if __name__ == "__main__":
     run_parser.add_argument("-t", "--transverseFolder", help="Path to transverse folder.")
     run_parser.add_argument("-U", "--until", help="Specify until which rule you want to run the workflow", default="")
     run_parser.add_argument("-w", "--noCopyToWorkspace", action='store_false', help="Do not copy results to workspace. Only for curie network")
+    run_parser.add_argument("-C", "--containersFolder", help="Path to singularity containers folder.", default=os.path.join(os.path.dirname(os.path.realpath(__file__)), 'singularity'))
 
     args = parser.parse_args()
 
@@ -860,16 +870,17 @@ if __name__ == "__main__":
         if not args.outDir:
             args.outDir = args.inputFolder
         try:
-            nanoclid = NanoClid(args.inputFolder, args.bedDir, args.bedFile, args.runID, args.outDir, args.dryRun, args.genomeVersion, args.until, args.samples, args.outputTemplate, args.snpEffDir, args.noCopyToTransverse, args.noCopyToWorkspace, args.noRunAllAnalysisOnCluster, args.transverseFolder, args.samplesheet, args.refDir, args.hostName, args.snakemakeBin, args.email, args.profile, args.queue)
+            nanoclid = NanoClid(args.inputFolder, args.bedDir, args.bedFile, args.runID, args.outDir, args.dryRun, args.genomeVersion, args.until, args.samples, args.outputTemplate, args.snpEffDir, args.noCopyToTransverse, args.noCopyToWorkspace, args.noRunAllAnalysisOnCluster, args.transverseFolder, args.samplesheet, args.refDir, args.hostName, args.snakemakeBin, args.email, args.profile, args.queue, args.containersFolder)
             nanoclid._runNanoClid()
         except Exception as e:
             with open(os.path.join(nanoclid.outDir, nanoclid.run, 'errorLaunching.txt'), 'w') as f:
                 f.write(str(e))
                 f.write(traceback.format_exc())
             profile = nanoclid.loadConfig(os.path.join(nanoclid.profile, "config.yaml"))
-            containersPath = profile["singularity-prefix"]
+         #   containersPath = profile["singularity-prefix"]
+            containersPath = args.containersFolder
             config = nanoclid.loadConfig(nanoclid.configTemplate)
-            config["email"] = "bioinfo-clinique@curie.fr"
+            config["email"] = "f.oberhammer+debug@prinsesmaximacentrum.nl"
             config["errorMail"]["content"] = traceback.format_exc()
             config["errorMail"]["subject"] = config["errorMail"]["subject"][1:-1] #remove ''
             from utils.utils import sendMail
