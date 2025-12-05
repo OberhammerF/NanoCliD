@@ -17,16 +17,8 @@ RES_FOLDER = os.path.join(config["output_dir"], config["run"])
 
 LOG_PATH = os.path.join(config["output_dir"], config["run"], "logs/")
 
-#CONTAINERS_PATH = workflow.singularity_prefix
-#CONTAINERS_PATH = getattr(workflow, "singularity_prefix", None) \
-#    or os.environ.get("SINGULARITY_PREFIX") \
-#    or config.get("singularity-prefix", "")
-
-CONTAINERS_PATH = config.get("containers_path", config.get("git_dir", "") + "/singularity") + "/"
-
-print(f"DEBUG: CONTAINERS_PATH = {CONTAINERS_PATH}")
-print(f"DEBUG: config.get('containers_path') = {config.get('containers_path', 'NOT FOUND')}")
-print(f"DEBUG: Current working directory = {os.getcwd()}")
+# CONTAINERS_PATH is set from the required -C/--containersFolder argument
+CONTAINERS_PATH = config["containers_path"]
 
 if "shbli" in hostname or "node" in hostname:
     LOG_CLUSTER_PATH=os.path.join(config["output_dir"], config["run"], "logs_cluster/")

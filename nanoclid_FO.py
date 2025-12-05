@@ -34,11 +34,27 @@ class NanoClid:
         self.outTemplate = outTemplate
         self.gitDir = os.path.dirname(os.path.realpath(__file__))
         self.snpEffDir = snpEffDir
-        self.containersFolder = containersFolder if containersFolder else os.path.join(self.gitDir, "containers")
+        # containersFolder is now required - must be passed as argument
+        if not containersFolder:
+            raise ValueError("containersFolder is required. Please provide the path to the singularity containers folder using -C/--containersFolder argument.")
+        self.containersFolder = os.path.abspath(containersFolder)
+        if not os.path.isdir(self.containersFolder):
+            raise ValueError(f"containersFolder does not exist: {self.containersFolder}")
         if snakemakeBin is None and profile is None and curieNetwork:
             self.snakemakeBin, profile = curieFunctions._setSnakemakeBinAndProfile()
         else:
-            self.snakemakeBin, profile = snakemakeBin, profile
+            # If snakemakeBin not provided, try to find it in PATH or venv
+            if snakemakeBin is None:
+                import shutil
+                snakemakeBin = shutil.which("snakemake")
+                if snakemakeBin is None:
+                    # Try venv in gitDir
+                    venv_snakemake = os.path.join(self.gitDir, "venv", "bin", "snakemake")
+                    if os.path.exists(venv_snakemake):
+                        snakemakeBin = venv_snakemake
+                    else:
+                        raise ValueError("snakemake not found in PATH. Please provide -B/--snakemakeBin argument or activate the venv.")
+            self.snakemakeBin = snakemakeBin
         self.configTemplate = self.__setConfigTemplate(self.gitDir, self.run, curieNetwork, profile)
         self.profile = os.path.join(self.gitDir, "profiles", "curie", profile) if curieNetwork else os.path.join(self.gitDir, "profiles", "externe", profile)
         if refDir == "" and curieNetwork:
@@ -263,18 +279,12 @@ class NanoClid:
         return configYaml
 
     def writeConfig(self, dico, path):
-        """Debug version to see what's being written"""
         if os.path.basename(path) == "config.yaml":
+            # This is a profile config - use yaml.dump for proper formatting
             with open(path, "w") as file:
                 yaml.dump(dico, file, sort_keys=False)
         else:
-            # Add debug output
-            print(f"DEBUG: Writing config to {path}")
-            for key in dico.keys():
-                val = dico[key]
-                if not isinstance(val, dict) and not isinstance(val, list) and not isinstance(val, bool) and not isinstance(val, int):
-                    print(f"  {key}: {type(val).__name__} = {repr(val)[:100]}")
-            
+            # This is a run config - use custom format
             f = open(path, "w")
             for key in dico.keys():
                 if type(dico[key]) != dict:
@@ -290,6 +300,7 @@ class NanoClid:
             f.close()
 
     def __updateConfig(self, config):
+        
         # Ensure all tool sections are dicts (template may have them as strings or missing)
         tool_sections = [
             "dorado", "guppy", "minimap2", "slow5tools", "slow5_merge", "bluecrab",
@@ -479,13 +490,10 @@ class NanoClid:
         config["run"] = getattr(self, "run", "")
         config["genome_version"] = getattr(self, "genomeVersion", "")
 
-        # Set containers_path to the singularity directory
-        if "containers_path" not in config or not config["containers_path"]:
-            config["containers_path"] = self.containersFolder + "/"
-        else:
-            # Ensure trailing slash
-            if not config["containers_path"].endswith("/"):
-                config["containers_path"] = config["containers_path"] + "/"
+        # Set containers_path - use the required containersFolder argument directly
+        config["containers_path"] = self.containersFolder
+        if not config["containers_path"].endswith("/"):
+            config["containers_path"] = config["containers_path"] + "/"
 
         # Genome / minimap2 paths
         refdir = getattr(self, "refDir", "")
@@ -542,9 +550,12 @@ class NanoClid:
         return config
 
     def __createConfig(self, template, folder, run):
+        
         os.makedirs(folder, exist_ok=True)
         configFile = f"{run}.yaml"
         config = self.loadConfig(template)
+        
+        
         # Remove any tool sections from template that are not dicts (force __updateConfig to set them)
         tool_sections = [
             "dorado", "guppy", "minimap2", "slow5tools", "slow5_merge", "bluecrab",
@@ -559,7 +570,11 @@ class NanoClid:
                 del config[section]  # remove bad entries, __updateConfig will recreate them
                 config[section] = {}
         config = self.__updateConfig(config)
+        
+        
         self.writeConfig(config, os.path.join(folder, configFile))
+        
+        
         return os.path.join(folder, configFile)
 
     def __updateProfile(self, profile, outDir, run, queue):
@@ -567,13 +582,20 @@ class NanoClid:
         profileType = profile.split("/")[-1]
         subprocess.call(f"cp -r {profile} {outDir}/{run}", shell=True)
         profileDico = self.loadConfig(f"{outDir}/{run}/{profileType}/config.yaml")
+        
+        # Update singularity-args with actual paths
         profileDico["singularity-args"] = profileDico["singularity-args"].replace("GIT_DIR", self.gitDir)
         if os.path.exists(self.refDir):
             profileDico["singularity-args"] = profileDico["singularity-args"].replace("REF_DIR", self.refDir)
         else:
             profileDico["singularity-args"] = profileDico["singularity-args"].replace("REF_DIR,", "")
         profileDico["singularity-args"] = profileDico["singularity-args"].replace("PDIR_VAR", NanoClid._DEFAULT_P_DIR[profileType])
-        profileDico["singularity-prefix"] = profileDico["singularity-prefix"].replace("GIT_DIR", self.gitDir)
+        
+        # Set singularity-prefix directly from containersFolder argument
+        profileDico["singularity-prefix"] = self.containersFolder
+        if not profileDico["singularity-prefix"].endswith("/"):
+            profileDico["singularity-prefix"] = profileDico["singularity-prefix"] + "/"
+        
         if queue:
             idxQueue = [i for i in range(len(profileDico['default-resources'])) if 'partition' in profileDico['default-resources'][i]][0]
             profileDico['default-resources'][idxQueue] = f'slurm_partition={queue}'
@@ -581,6 +603,7 @@ class NanoClid:
             profileDico["default-resources"] = ",".join(profileDico["default-resources"]).replace("ENV", env).split(",")
         if "cluster" in profileDico.keys():
             profileDico["cluster"] = profileDico["cluster"].replace("logs_cluster", f"{self.outDir}/{self.run}/logs_cluster")
+        
         self.writeConfig(profileDico, f"{outDir}/{run}/{profileType}/config.yaml")
         if "standalone" in profile and not self.until:
             #standalone and no until means you want to run the pipe in standalone configuration, so we remove run_on_cluster.txt from expected output
@@ -647,6 +670,7 @@ class NanoClid:
         return summaryFilesPath
 
     def _runNanoClid(self):
+        
         if "abacus" in self.profile and curieNetwork:
             try:
                 curieFunctions._deleteOldRun(self.inputFolder, self.run)
@@ -656,7 +680,11 @@ class NanoClid:
             self.sampleSheet = curieFunctions._getSampleSheet(self.run, self.inputFolder, self.loadConfig(self.configTemplate), self.loadConfig(os.path.join(self.profile, "config.yaml")), self.profile)
         self.parseSampleSheet(self.sampleSheet, self.bedFile)
         configFile = self.__createConfig(self.configTemplate, f"{self.outDir}/{self.run}", self.run)
+        
+        
         profile = self.__updateProfile(self.profile, self.outDir, self.run, self.queue)
+        
+        
         if curieNetwork:
             curieFunctions.runSnakemake(self.snakemakeBin, os.path.join(self.gitDir, "workflow/Snakefile"), configFile, profile, self.dryRun, self.outDir, self.run, self.gitDir, self.fastqConcatenated, self.until, self.demultiplexing, self.copyToTransverse, self.copyToWorkspace, self.runOnCluster, self.fromBlow5, self.fromFast5)
         else:
@@ -776,7 +804,7 @@ class NanoClid:
         print("Retrieving snpEff annotations OK")
         print("Install completed. NanoCliD is ready to use. Please launch test command.")
 
-    def _runTest(self, refDir, profile, email):
+    def _runTest(self, refDir, profile, email, containersFolder):
         gitDir = os.path.dirname(os.path.realpath(__file__))
         print("Extracting data test folder...")
         code = subprocess.call(f"tar -xvf {os.path.join(gitDir, 'data', 'input', 'input.tar.gz')} -C {os.path.join(gitDir, 'data')}", shell = True)
@@ -815,7 +843,8 @@ class NanoClid:
             hostName=hostName,
             snakemakeBin=snakemakeBin,
             email=email,
-            profile=profile
+            profile=profile,
+            containersFolder=containersFolder
         )
         nanoclid._runNanoClid()
 
@@ -832,12 +861,14 @@ if __name__ == "__main__":
     test_parser.add_argument("-e", "--email", help="Email adress to send run informations.")
     test_parser.add_argument("-p", "--profile", required=True, help="Profile to use to launch NanoCliD. Must be standalone|calcsub|abacus")
     test_parser.add_argument("-R", "--refDir", required=True, help="Path to folder containing genome files")
+    test_parser.add_argument("-C", "--containersFolder", required=True, help="Path to singularity containers folder (required).")
 
     run_parser = subs.add_parser("run", help='Run NanoClid')
     run_parser.add_argument("-b", "--bedDir", help="Path to folder containing bed files.", default = "")
     run_parser.add_argument("--bedFile", help="Path to bed file.", default = "")
     run_parser.add_argument("-B", "--snakemakeBin", help="Path to snakemake bin.")
     run_parser.add_argument("-c", "--noCopyToTransverse", action='store_false', help="Do not copy results to transverse. Only for curie network.")
+    run_parser.add_argument("-C", "--containersFolder", required=True, help="Path to singularity containers folder (required).")
     run_parser.add_argument("-D", "--snpEffDir", help="Folder containing snpEff annotation files.",  default=os.path.join(os.path.dirname(os.path.realpath(__file__)), 'annotations/data'))
     run_parser.add_argument("-e", "--email", help="Used by snakemake to send error/launching message.")
     run_parser.add_argument("-g", "--genomeVersion", required=True, help="Genome version for the analysis.")
@@ -856,21 +887,23 @@ if __name__ == "__main__":
     run_parser.add_argument("-t", "--transverseFolder", help="Path to transverse folder.")
     run_parser.add_argument("-U", "--until", help="Specify until which rule you want to run the workflow", default="")
     run_parser.add_argument("-w", "--noCopyToWorkspace", action='store_false', help="Do not copy results to workspace. Only for curie network")
-    run_parser.add_argument("-C", "--containersFolder", help="Path to singularity containers folder.", default=os.path.join(os.path.dirname(os.path.realpath(__file__)), 'singularity'))
 
     args = parser.parse_args()
 
     if args.command == "install":
-        NanoClid(profile = "standalone")._install(args.singularityFolder)
+        NanoClid(profile = "standalone", containersFolder=args.singularityFolder)._install(args.singularityFolder)
 
     if args.command == "test":
-        NanoClid(profile = "standalone")._runTest(args.refDir, args.profile, args.email)
+        NanoClid(profile = "standalone", containersFolder=args.containersFolder)._runTest(args.refDir, args.profile, args.email, args.containersFolder)
 
     if args.command == "run":
+        
         if not args.outDir:
             args.outDir = args.inputFolder
         try:
             nanoclid = NanoClid(args.inputFolder, args.bedDir, args.bedFile, args.runID, args.outDir, args.dryRun, args.genomeVersion, args.until, args.samples, args.outputTemplate, args.snpEffDir, args.noCopyToTransverse, args.noCopyToWorkspace, args.noRunAllAnalysisOnCluster, args.transverseFolder, args.samplesheet, args.refDir, args.hostName, args.snakemakeBin, args.email, args.profile, args.queue, args.containersFolder)
+            
+            
             nanoclid._runNanoClid()
         except Exception as e:
             with open(os.path.join(nanoclid.outDir, nanoclid.run, 'errorLaunching.txt'), 'w') as f:

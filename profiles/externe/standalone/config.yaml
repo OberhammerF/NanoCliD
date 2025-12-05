@@ -1,6 +1,6 @@
 use-singularity: true
 singularity-args: '-B GIT_DIR/utils/,GIT_DIR/annotations/,REF_DIR,GIT_DIR/annotations/nanovar/:/mnt'
-singularity-prefix: "GIT_DIR/singularity/"
+singularity-prefix: ""
 restart-times: 3
 latency-wait: 60
 cores: 1
