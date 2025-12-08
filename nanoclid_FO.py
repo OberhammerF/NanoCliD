@@ -21,7 +21,7 @@ except:
 class NanoClid:
     _DEFAULT_P_DIR = {"abacus" : "/mnt/beegfs/EH/pipelines/prod/.p", "calcsub" : "/data/bioinfo-clinique-public/prod/.p", "standalone" : "/data/bioinfo-clinique-public/prod/.p"}
 
-    def __init__(self, inputFolder=None, bedDir=None, bedFile=None, run=None, outDir=None, dryRun=None, genomeVersion=None, until=None, samples="", outTemplate=None, snpEffDir=None, copyToTransverse=None, copyToWorkspace=None, runOnCluster=None, transverseFolder = None, sampleSheet = None, refDir = None, hostName = None, snakemakeBin = None, email = "", profile = None, queue = None, containersFolder = None):
+    def __init__(self, inputFolder=None, bedDir=None, bedFile=None, run=None, outDir=None, dryRun=None, genomeVersion=None, until=None, samples="", outTemplate=None, snpEffDir=None, copyToTransverse=None, copyToWorkspace=None, runOnCluster=None, transverseFolder = None, sampleSheet = None, refDir = None, hostName = None, snakemakeBin = None, email = "", profile = None, queue = None, containersFolder = None, doradoModelsFolder = None):
         self.inputFolder = inputFolder
         self.bedDir = bedDir
         self.bedFile = bedFile
@@ -34,6 +34,7 @@ class NanoClid:
         self.outTemplate = outTemplate
         self.gitDir = os.path.dirname(os.path.realpath(__file__))
         self.snpEffDir = snpEffDir
+        self.doradoModelsFolder = doradoModelsFolder
         # containersFolder is now required - must be passed as argument
         if not containersFolder:
             raise ValueError("containersFolder is required. Please provide the path to the singularity containers folder using -C/--containersFolder argument.")
@@ -591,6 +592,14 @@ class NanoClid:
             profileDico["singularity-args"] = profileDico["singularity-args"].replace("REF_DIR,", "")
         profileDico["singularity-args"] = profileDico["singularity-args"].replace("PDIR_VAR", NanoClid._DEFAULT_P_DIR[profileType])
         
+        # Add --nv flag for GPU support if not already present
+        if "--nv" not in profileDico["singularity-args"]:
+            profileDico["singularity-args"] = "--nv " + profileDico["singularity-args"]
+        
+        # Add dorado models bind mount if provided
+        if self.doradoModelsFolder and os.path.exists(self.doradoModelsFolder):
+            profileDico["singularity-args"] += f",{self.doradoModelsFolder}:/root/.local/share/dorado/models"
+        
         # Set singularity-prefix directly from containersFolder argument
         profileDico["singularity-prefix"] = self.containersFolder
         if not profileDico["singularity-prefix"].endswith("/"):
@@ -804,7 +813,7 @@ class NanoClid:
         print("Retrieving snpEff annotations OK")
         print("Install completed. NanoCliD is ready to use. Please launch test command.")
 
-    def _runTest(self, refDir, profile, email, containersFolder):
+    def _runTest(self, refDir, profile, email, containersFolder, doradoModelsFolder):
         gitDir = os.path.dirname(os.path.realpath(__file__))
         print("Extracting data test folder...")
         code = subprocess.call(f"tar -xvf {os.path.join(gitDir, 'data', 'input', 'input.tar.gz')} -C {os.path.join(gitDir, 'data')}", shell = True)
@@ -844,7 +853,8 @@ class NanoClid:
             snakemakeBin=snakemakeBin,
             email=email,
             profile=profile,
-            containersFolder=containersFolder
+            containersFolder=containersFolder,
+            doradoModelsFolder=doradoModelsFolder
         )
         nanoclid._runNanoClid()
 
@@ -862,7 +872,8 @@ if __name__ == "__main__":
     test_parser.add_argument("-p", "--profile", required=True, help="Profile to use to launch NanoCliD. Must be standalone|calcsub|abacus")
     test_parser.add_argument("-R", "--refDir", required=True, help="Path to folder containing genome files")
     test_parser.add_argument("-C", "--containersFolder", required=True, help="Path to singularity containers folder (required).")
-
+    test_parser.add_argument("-M", "--doradoModelsFolder", help="Path to dorado models folder.", required=True)
+    
     run_parser = subs.add_parser("run", help='Run NanoClid')
     run_parser.add_argument("-b", "--bedDir", help="Path to folder containing bed files.", default = "")
     run_parser.add_argument("--bedFile", help="Path to bed file.", default = "")
@@ -887,6 +898,7 @@ if __name__ == "__main__":
     run_parser.add_argument("-t", "--transverseFolder", help="Path to transverse folder.")
     run_parser.add_argument("-U", "--until", help="Specify until which rule you want to run the workflow", default="")
     run_parser.add_argument("-w", "--noCopyToWorkspace", action='store_false', help="Do not copy results to workspace. Only for curie network")
+    run_parser.add_argument("-M", "--doradoModelsFolder", help="Path to dorado models folder.", required=True, default=None)
 
     args = parser.parse_args()
 
@@ -894,14 +906,38 @@ if __name__ == "__main__":
         NanoClid(profile = "standalone", containersFolder=args.singularityFolder)._install(args.singularityFolder)
 
     if args.command == "test":
-        NanoClid(profile = "standalone", containersFolder=args.containersFolder)._runTest(args.refDir, args.profile, args.email, args.containersFolder)
+        NanoClid(profile = "standalone", containersFolder=args.containersFolder, doradoModelsFolder=args.doradoModelsFolder)._runTest(args.refDir, args.profile, args.email, args.containersFolder, args.doradoModelsFolder)
 
     if args.command == "run":
         
         if not args.outDir:
             args.outDir = args.inputFolder
         try:
-            nanoclid = NanoClid(args.inputFolder, args.bedDir, args.bedFile, args.runID, args.outDir, args.dryRun, args.genomeVersion, args.until, args.samples, args.outputTemplate, args.snpEffDir, args.noCopyToTransverse, args.noCopyToWorkspace, args.noRunAllAnalysisOnCluster, args.transverseFolder, args.samplesheet, args.refDir, args.hostName, args.snakemakeBin, args.email, args.profile, args.queue, args.containersFolder)
+            nanoclid = NanoClid(args.inputFolder, 
+                                args.bedDir,
+                                args.bedFile,
+                                args.runID,
+                                args.outDir,
+                                args.dryRun,
+                                args.genomeVersion, 
+                                args.until,
+                                args.samples,
+                                args.outputTemplate,
+                                args.snpEffDir,
+                                args.noCopyToTransverse,
+                                args.noCopyToWorkspace,
+                                args.noRunAllAnalysisOnCluster,
+                                args.transverseFolder,
+                                args.samplesheet,
+                                args.refDir,
+                                args.hostName,
+                                args.snakemakeBin,
+                                args.email,
+                                args.profile,
+                                args.queue,
+                                args.containersFolder,
+                                args.doradoModelsFolder
+                                )
             
             
             nanoclid._runNanoClid()
