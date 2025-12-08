@@ -14,7 +14,7 @@ rule basecalling:
     params:
         parameters_guppy = config["guppy"]["parameters_standalone"],
         parameters_dorado = config["dorado"]["parameters"],
-        model_dorado = config["dorado"]["model"],
+        model_dorado = os.path.join(config["dorado"]["models_path"], config["dorado"]["model"]) if config["dorado"]["models_path"] else config["dorado"]["model"],
         fromBlow5 = config["fromBlow5"],
         fromPod5 = config["fromPod5"]
     log:

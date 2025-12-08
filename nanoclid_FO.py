@@ -320,6 +320,8 @@ class NanoClid:
         config["dorado"].setdefault("model", config.get("dorado", {}).get("model", ""))
         config["dorado"].setdefault("sif", "dorado.sif")
         config["dorado"].setdefault("demux", "")
+        # Set dorado models path from command line argument
+        config["dorado"]["models_path"] = self.doradoModelsFolder if self.doradoModelsFolder else ""
         
         config["guppy"].setdefault("parameters", config.get("guppy", {}).get("parameters", ""))
         config["guppy"].setdefault("parameters_standalone", config.get("guppy", {}).get("parameters_standalone", ""))
@@ -596,9 +598,9 @@ class NanoClid:
         if "--nv" not in profileDico["singularity-args"]:
             profileDico["singularity-args"] = "--nv " + profileDico["singularity-args"]
         
-        # Add dorado models bind mount if provided
+        # Add dorado models bind mount if provided (bind to same path so it's accessible inside container)
         if self.doradoModelsFolder and os.path.exists(self.doradoModelsFolder):
-            profileDico["singularity-args"] += f",{self.doradoModelsFolder}:/root/.local/share/dorado/models"
+            profileDico["singularity-args"] += f",{self.doradoModelsFolder}"
         
         # Set singularity-prefix directly from containersFolder argument
         profileDico["singularity-prefix"] = self.containersFolder
