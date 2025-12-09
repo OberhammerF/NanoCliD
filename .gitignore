@@ -3,3 +3,4 @@ singularity
 data
 venv
 annotations/dorado_models
+pipeline*.log
