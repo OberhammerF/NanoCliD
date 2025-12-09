@@ -21,7 +21,7 @@ except:
 class NanoClid:
     _DEFAULT_P_DIR = {"abacus" : "/mnt/beegfs/EH/pipelines/prod/.p", "calcsub" : "/data/bioinfo-clinique-public/prod/.p", "standalone" : "/data/bioinfo-clinique-public/prod/.p"}
 
-    def __init__(self, inputFolder=None, bedDir=None, bedFile=None, run=None, outDir=None, dryRun=None, genomeVersion=None, until=None, samples="", outTemplate=None, snpEffDir=None, copyToTransverse=None, copyToWorkspace=None, runOnCluster=None, transverseFolder = None, sampleSheet = None, refDir = None, hostName = None, snakemakeBin = None, email = "", profile = None, queue = None, containersFolder = None, doradoModelsFolder = None):
+    def __init__(self, inputFolder=None, bedDir=None, bedFile=None, run=None, outDir=None, dryRun=None, genomeVersion=None, until=None, samples="", outTemplate=None, snpEffDir=None, copyToTransverse=None, copyToWorkspace=None, runOnCluster=None, transverseFolder = None, sampleSheet = None, refDir = None, hostName = None, snakemakeBin = None, email = "", profile = None, queue = None, containersFolder = None, doradoModelsFolder = None, basecaller=None):
         self.inputFolder = inputFolder
         self.bedDir = bedDir
         self.bedFile = bedFile
@@ -35,6 +35,7 @@ class NanoClid:
         self.gitDir = os.path.dirname(os.path.realpath(__file__))
         self.snpEffDir = snpEffDir
         self.doradoModelsFolder = doradoModelsFolder
+        self.basecaller = basecaller if basecaller else "dorado"
         # containersFolder is now required - must be passed as argument
         if not containersFolder:
             raise ValueError("containersFolder is required. Please provide the path to the singularity containers folder using -C/--containersFolder argument.")
@@ -471,14 +472,56 @@ class NanoClid:
         else:
             config["dorado"]["model"] = f"dna_{flow}_e8_hac@v3.3" if flow else ""
 
+        # Set guppy model config file based on flow cell type
+        # Model files are inside container at /opt/ont-guppy/data/
+        if flow:
+            if "r10" in flow:
+                guppy_model_cfg = f"dna_{flow}_e8.2_400bps_hac{seq}.cfg"
+            else:
+                guppy_model_cfg = f"dna_{flow}_450bps_hac{seq}.cfg"
+        else:
+            guppy_model_cfg = "dna_r9.4.1_450bps_hac.cfg"  # default fallback
+        
+        # Ensure guppy section exists and set model
+        if "guppy" not in config:
+            config["guppy"] = {}
+        config["guppy"]["model"] = guppy_model_cfg
+
+        # Set default guppy standalone parameters if not set (for GPU basecalling)
+        if not config["guppy"].get("parameters_standalone"):
+            config["guppy"]["parameters_standalone"] = "--device cuda:0"
+
         if config["guppy"].get("parameters_standalone"):
             if "r10" in flow:
                 cfg = f"dna_{flow}_e8.2_400bps_hac{seq}.cfg"
             else:
                 cfg = f"dna_{flow}_450bps_hac{seq}.cfg"
             config["guppy"]["parameters_standalone"] = config["guppy"]["parameters_standalone"].replace("FLOWCELL", cfg)
-        else:
-            config["guppy"]["parameters_standalone"] = ""
+
+        # Replace FLOWCELL placeholder in guppy.parameters if present
+        try:
+            if "FLOWCELL" in config["guppy"].get("parameters", ""):
+                if 'cfg' not in locals():
+                    if "r10" in flow:
+                        cfg = f"dna_{flow}_e8.2_400bps_hac{seq}.cfg"
+                    else:
+                        cfg = f"dna_{flow}_450bps_hac{seq}.cfg"
+                config["guppy"]["parameters"] = config["guppy"]["parameters"].replace("FLOWCELL", cfg)
+        except Exception:
+            pass
+
+        # If a guppy .sif exists in the containers folder, set its absolute path in the run config
+        try:
+            if getattr(self, "containersFolder", None):
+                import glob
+                guppy_candidates = glob.glob(os.path.join(self.containersFolder, "guppy*.sif"))
+                if guppy_candidates:
+                    sel = next((c for c in guppy_candidates if os.path.basename(c) == "guppy.sif"), guppy_candidates[0])
+                    config["guppy"]["sif"] = sel
+        except Exception:
+            pass
+
+
 
         # Demultiplexing params
         if getattr(self, "demultiplexing", False):
@@ -501,6 +544,13 @@ class NanoClid:
         # Genome / minimap2 paths
         refdir = getattr(self, "refDir", "")
         gv = getattr(self, "genomeVersion", "")
+        
+          # DEBUG: Print what we have
+        print(f"DEBUG __updateConfig: self.refDir = {self.refDir}")
+        print(f"DEBUG __updateConfig: refdir = {refdir}")
+        print(f"DEBUG __updateConfig: gv = {gv}")
+        
+        
         if refdir and gv:
             # Convert to absolute path so Snakemake can find files from any working directory
             refdir_abs = os.path.abspath(refdir)
@@ -543,6 +593,15 @@ class NanoClid:
 
         if self.email:
             config["email"] = self.email
+
+        # --- set preferred basecaller so Snakemake config reflects choice ---
+        config["basecaller"] = getattr(self, "basecaller", "dorado")
+        if config["basecaller"] == "guppy":
+            # avoid binding dorado models and ensure guppy section present
+            config["dorado"]["models_path"] = ""
+            config["dorado"]["sif"] = ""
+            config["guppy"].setdefault("sif", "guppy.sif")
+
 
         if curieNetwork:
             config = curieFunctions._addSpecificCurieInfoToConfig(config, self.run, self.hostName, self.gitDir, self.email, self.transverseFolder)
@@ -597,11 +656,16 @@ class NanoClid:
         # Add --nv flag for GPU support if not already present
         if "--nv" not in profileDico["singularity-args"]:
             profileDico["singularity-args"] = "--nv " + profileDico["singularity-args"]
-        
-        # Add dorado models bind mount if provided (bind to same path so it's accessible inside container)
-        if self.doradoModelsFolder and os.path.exists(self.doradoModelsFolder):
-            profileDico["singularity-args"] += f",{self.doradoModelsFolder}"
-        
+        # Add dorado models bind mount if provided (only once)
+        try:
+            dorado_bind = getattr(self, "doradoModelsFolder", None)
+            if dorado_bind and os.path.exists(dorado_bind):
+                # Only append if not already present in the singularity-args string
+                if dorado_bind not in profileDico["singularity-args"]:
+                    profileDico["singularity-args"] += f",{dorado_bind}"
+        except Exception:
+            pass
+
         # Set singularity-prefix directly from containersFolder argument
         profileDico["singularity-prefix"] = self.containersFolder
         if not profileDico["singularity-prefix"].endswith("/"):
@@ -856,7 +920,8 @@ class NanoClid:
             email=email,
             profile=profile,
             containersFolder=containersFolder,
-            doradoModelsFolder=doradoModelsFolder
+            doradoModelsFolder=doradoModelsFolder,
+            basecaller=self.basecaller
         )
         nanoclid._runNanoClid()
 
@@ -875,7 +940,8 @@ if __name__ == "__main__":
     test_parser.add_argument("-R", "--refDir", required=True, help="Path to folder containing genome files")
     test_parser.add_argument("-C", "--containersFolder", required=True, help="Path to singularity containers folder (required).")
     test_parser.add_argument("-M", "--doradoModelsFolder", help="Path to dorado models folder.", required=True)
-    
+    test_parser.add_argument("-X", "--basecaller", choices=["dorado","guppy"], default="dorado", help="Choose basecaller to use (dorado or guppy).")
+
     run_parser = subs.add_parser("run", help='Run NanoClid')
     run_parser.add_argument("-b", "--bedDir", help="Path to folder containing bed files.", default = "")
     run_parser.add_argument("--bedFile", help="Path to bed file.", default = "")
@@ -901,6 +967,7 @@ if __name__ == "__main__":
     run_parser.add_argument("-U", "--until", help="Specify until which rule you want to run the workflow", default="")
     run_parser.add_argument("-w", "--noCopyToWorkspace", action='store_false', help="Do not copy results to workspace. Only for curie network")
     run_parser.add_argument("-M", "--doradoModelsFolder", help="Path to dorado models folder.", required=True, default=None)
+    run_parser.add_argument("-X", "--basecaller", choices=["dorado","guppy"], default="dorado", help="Choose basecaller to use (dorado or guppy).")
 
     args = parser.parse_args()
 
@@ -908,7 +975,7 @@ if __name__ == "__main__":
         NanoClid(profile = "standalone", containersFolder=args.singularityFolder)._install(args.singularityFolder)
 
     if args.command == "test":
-        NanoClid(profile = "standalone", containersFolder=args.containersFolder, doradoModelsFolder=args.doradoModelsFolder)._runTest(args.refDir, args.profile, args.email, args.containersFolder, args.doradoModelsFolder)
+        NanoClid(profile = "standalone", containersFolder=args.containersFolder, doradoModelsFolder=args.doradoModelsFolder, basecaller=args.basecaller)._runTest(args.refDir, args.profile, args.email, args.containersFolder, args.doradoModelsFolder)
 
     if args.command == "run":
         
@@ -938,7 +1005,8 @@ if __name__ == "__main__":
                                 args.profile,
                                 args.queue,
                                 args.containersFolder,
-                                args.doradoModelsFolder
+                                args.doradoModelsFolder,
+                                args.basecaller
                                 )
             
             

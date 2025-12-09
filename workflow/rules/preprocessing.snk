@@ -12,24 +12,35 @@ rule basecalling:
     output:
         fastq =  os.path.join(RES_FOLDER_INJECTION, "{injections}", "{samples}", "FASTQ", "{samples}.fastq.gz"),
     params:
-        parameters_guppy = config["guppy"]["parameters_standalone"],
+        parameters_guppy = config["guppy"].get("parameters_standalone", ""),
+        # Guppy model config file - look in /opt/ont-guppy/data/ inside container
+        model_guppy = config["guppy"].get("model", "dna_r9.4.1_450bps_hac.cfg"),
         parameters_dorado = config["dorado"]["parameters"],
         model_dorado = os.path.join(config["dorado"]["models_path"], config["dorado"]["model"]) if config["dorado"]["models_path"] else config["dorado"]["model"],
         fromBlow5 = config["fromBlow5"],
-        fromPod5 = config["fromPod5"]
+        fromPod5 = config["fromPod5"],
+        basecaller = config.get("basecaller", "dorado")
     log:
         os.path.join(LOG_PATH, "baseCalling/{injections}_{samples}.log")
     threads: 1
     container:
-        os.path.join(CONTAINERS_PATH, config["guppy"]["sif"]) if config["fromPod5"] == "no" else os.path.join(CONTAINERS_PATH, config["dorado"]["sif"])
+        os.path.join(CONTAINERS_PATH, config["guppy"]["sif"]) if config.get("basecaller", "dorado") == "guppy" else os.path.join(CONTAINERS_PATH, config["dorado"]["sif"])
     shell:
         """
         INPUT_PATH={input}
-        if [ {params.fromPod5} == "yes" ]; then
+        if [ "{params.basecaller}" == "dorado" ]; then
             dorado basecaller {params.parameters_dorado} {params.model_dorado} $INPUT_PATH > {output.fastq} 2> {log}
         else
-            /opt/ont-guppy/bin/guppy_basecaller {params.parameters_guppy} --input_path $INPUT_PATH --save_path $(dirname {output.fastq}) 2> {log}
-            find $(dirname {output.fastq})/pass/ -type f -name '*.fastq.gz' -exec cat {{}} > {output.fastq} \; 2> {log}
+            # Guppy basecalling - model configs are in /opt/ont-guppy/data/ inside container
+            OUTDIR=$(dirname {output.fastq})
+            /opt/ont-guppy/bin/guppy_basecaller \
+                --config /opt/ont-guppy/data/{params.model_guppy} \
+                --input_path $INPUT_PATH \
+                --save_path $OUTDIR \
+                --compress_fastq \
+                {params.parameters_guppy} 2> {log}
+            # Concatenate all fastq.gz files from pass folder
+            find $OUTDIR/pass/ -type f -name '*.fastq.gz' -exec cat {{}} + > {output.fastq} 2>> {log}
         fi
         """
 
