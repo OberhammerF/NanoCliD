@@ -4,3 +4,10 @@ data
 venv
 annotations/dorado_models
 pipeline*.log
+
+singularity_abacus
+singularity_bak
+data_bak
+venv_bak
+annotations_bak
+annotations

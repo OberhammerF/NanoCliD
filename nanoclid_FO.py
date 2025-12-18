@@ -112,7 +112,7 @@ class NanoClid:
                 else:
                     bed = subprocess.check_output(f'grep TargetBED {sampleSheet}', shell=True).decode('utf-8').rstrip().split(',')[1]
                     if curieNetwork:
-                        bed = curieFunctions._getBed(bed, os.getenv("USER"))
+                        bed = curieFunctions._getBed(bed, os.getenv("USER"), self.genomeVersion, self.run)
                     else:
                         bed = os.path.join(self.bedDir, bed)
                 subprocess.call(f"cp {bed} {self.inputFolder}/{self.run}/archive/", shell = True)
@@ -768,117 +768,148 @@ class NanoClid:
 
     def _install(self, singularityFolder):
         """
-        Improved install:
-        - if nanoclid_images.tar.gz already exists, skip download
-        - extract archive robustly (handles files directly at root or under images/)
-        - ensure .sif images are present at singularityFolder (copy if needed)
-        - do NOT remove the tar archive after extraction
-        - leave extracted images in place (do not remove)
+        Install NanoCliD: download images, nanovar, set up venv, and retrieve snpEff annotations.
+        Each step is validated before proceeding to the next.
         """
-        print(singularityFolder)
-        os.makedirs(singularityFolder, exist_ok=True)
+        print(f"Installing NanoCliD to: {singularityFolder}")
         gitDir = os.path.dirname(os.path.realpath(__file__))
-        imagesPath = "http://xfer.curie.fr/get/UIKMX88dwEl/nanoclid_images.tar.gz"
-        inputData = "http://xfer.curie.fr/get/MKLi26AVv84/input.tar.gz"
-
-        # --- download input data if missing ---
-        input_dir = os.path.join(gitDir, 'data', 'input')
-        os.makedirs(input_dir, exist_ok=True)
-        input_tar = os.path.join(input_dir, 'input.tar.gz')
-        if not os.path.exists(input_tar):
-            print("Downloading input data ...")
-            code = subprocess.call(f"wget -P {input_dir}/ {inputData}", shell=True)
-            if code != 0:
-                raise ValueError(f"Download input data from {inputData} failed. Please retry or contact us.")
-            print("Download input data OK")
-        else:
-            print("Input data archive already present, skipping download.")
-
-        # --- download images tar if missing ---
-        images_tar = os.path.join(singularityFolder, 'nanoclid_images.tar.gz')
-        if not os.path.exists(images_tar):
-            print("Downloading images ...")
-            code = subprocess.call(f"wget -P {singularityFolder}/ {imagesPath}", shell=True)
-            if code != 0:
-                raise ValueError(f"Download images from {imagesPath} failed. Please retry or contact us.")
-            print("Download images OK")
-        else:
-            print("Images tar already present, skipping download.")
-
-        # --- inspect archive integrity ---
-        print("Inspecting archive ...")
-        try:
-            contents = subprocess.check_output(f"tar -tzf {images_tar}", shell=True).decode("utf-8").splitlines()
-        except subprocess.CalledProcessError:
-            raise ValueError("Unable to read nanoclid_images.tar.gz. Please check download integrity.")
-
-        # --- extract archive (safe) ---
-        print("Extracting archive ...")
-        code = subprocess.call(f"tar -xzf {images_tar} -C {singularityFolder}", shell=True)
+        
+        # URLs for downloads
+        imagesPath = "http://xfer.curie.fr/get/moe5ZZ8PGPD/images.tar.gz"
+        nanovarPath = "http://xfer.curie.fr/get/Al1MrbPdC0C/nanovar.tar.gz"
+        snpEffPath = "http://downloads.sourceforge.net/project/snpeff/databases/v4_3/snpEff_v4_3_hg19.zip"
+        
+        # Step 1: Create singularity folder
+        print("\n[1/7] Creating singularity folder...")
+        code = subprocess.call(f"mkdir -p {singularityFolder}", shell=True)
         if code != 0:
-            raise ValueError("Untar images failed. Please check download integrity")
-        print("Extraction OK")
-
-        # --- ensure .sif files are available at singularityFolder ---
-        # Case 1: files already at root -> nothing to do
-        top_sif = glob.glob(os.path.join(singularityFolder, '*.sif'))
-        if top_sif:
-            print(f"Found {len(top_sif)} .sif files in {singularityFolder}")
-        else:
-            # Case 2: files are under images/ subdirectory (common expectation)
-            images_dir = os.path.join(singularityFolder, 'images')
-            copied = False
-            if os.path.isdir(images_dir):
-                sif_files = glob.glob(os.path.join(images_dir, '*.sif'))
-                if sif_files:
-                    print(f"Found {len(sif_files)} .sif files in {images_dir}, copying to {singularityFolder}")
-                    for f in sif_files:
-                        dest = os.path.join(singularityFolder, os.path.basename(f))
-                        # copy, do not overwrite existing files
-                        if not os.path.exists(dest):
-                            subprocess.call(f"cp -a {f} {dest}", shell=True)
-                        copied = True
-            # Case 3: sif files may be nested elsewhere in the extracted tree
-            if not copied:
-                found = subprocess.check_output(f"find {singularityFolder} -type f -name '*.sif' -print 2> /dev/null", shell=True).decode('utf-8').splitlines()
-                if found:
-                    print(f"Found {len(found)} .sif files nested in extracted archive, copying to {singularityFolder}")
-                    for f in found:
-                        dest = os.path.join(singularityFolder, os.path.basename(f))
-                        if not os.path.exists(dest):
-                            subprocess.call(f"cp -a {f} {dest}", shell=True)
-
-        # IMPORTANT: do not remove the tar archive and do not delete extracted images.
-        print("Images ready in:", singularityFolder)
-        print("Note: nanoclid_images.tar.gz has been preserved in the singularity folder.")
-
-        # --- set up python virtual env and required python packages ---
-        print("Setting python virtual env ...")
-        code1 = subprocess.call(f"pip3 install virtualenv", shell=True)
-        code2 = subprocess.call(f"mkdir -p {gitDir}/venv && python3 -m venv {gitDir}/venv", shell=True)
-        try:
-            code3 = subprocess.run(['bash', '-c', f"source {gitDir}/venv/bin/activate && pip3 install --upgrade pip wheel setuptools"], check=True)
-            code4 = subprocess.run(['bash', '-c', f"source {gitDir}/venv/bin/activate && pip3 install snakemake pandas"], check=True)
-            rc_code3 = 0
-            rc_code4 = 0
-        except subprocess.CalledProcessError:
-            rc_code3 = 1
-            rc_code4 = 1
-
-        if 1 in [code1, code2, rc_code3, rc_code4]:
-            raise ValueError("Setting python virtualenv FAILED")
-        print("Setting python virtualenv OK")
-
-        # --- retrieve snpEff annotations ---
-        print("Retrieving snpEff annotations ...")
-        annotations_dir = os.path.join(gitDir, 'annotations')
-        os.makedirs(annotations_dir, exist_ok=True)
-        code = subprocess.call(f"wget -P {annotations_dir}/ http://downloads.sourceforge.net/project/snpeff/databases/v4_3/snpEff_v4_3_hg19.zip && cd {annotations_dir} && unzip -o snpEff_v4_3_hg19.zip && rm -f snpEff_v4_3_hg19.zip", shell=True)
+            raise ValueError(f"Failed to create singularity folder: {singularityFolder}")
+        if not os.path.isdir(singularityFolder):
+            raise ValueError(f"Singularity folder does not exist after creation: {singularityFolder}")
+        print("[1/7] Singularity folder created OK")
+        
+        # Step 2: Download images
+        print("\n[2/7] Downloading images...")
+        imagesArchive = os.path.join(singularityFolder, "images.tar.gz")
+        code = subprocess.call(f"wget -P {singularityFolder}/ {imagesPath}", shell=True)
         if code != 0:
-            raise ValueError("snpEff annotations retrieving failed for path http://downloads.sourceforge.net/project/snpeff/databases/v4_3/snpEff_v4_3_hg19.zip. Link may have been removed. Please contact us.")
-        print("Retrieving snpEff annotations OK")
-        print("Install completed. NanoCliD is ready to use. Please launch test command.")
-
+            raise ValueError(f"Download images failed (exit code {code}). URL: {imagesPath}")
+        if not os.path.isfile(imagesArchive):
+            raise ValueError(f"Images archive not found after download: {imagesArchive}")
+        print("[2/7] Download images OK")
+        
+        # Step 3: Untar images
+        print("\n[3/7] Extracting images archive...")
+        code = subprocess.call(
+            f"tar -xvf {imagesArchive} -C {singularityFolder} && "
+            f"mv {singularityFolder}/images/* {singularityFolder} && "
+            f"rm -rf {singularityFolder}/images {imagesArchive}",
+            shell=True
+        )
+        if code != 0:
+            raise ValueError(f"Untar images failed (exit code {code}). Check download integrity.")
+        # Verify at least one .sif file exists
+        sif_files = [f for f in os.listdir(singularityFolder) if f.endswith('.sif')]
+        if not sif_files:
+            raise ValueError(f"No .sif files found in {singularityFolder} after extraction. Extraction may have failed.")
+        print(f"[3/7] Extracted {len(sif_files)} container images OK")
+        
+        # Step 4: Download nanovar archive
+        print("\n[4/7] Downloading nanovar archive...")
+        annotationsDir = os.path.join(gitDir, "annotations")
+        nanovarArchive = os.path.join(annotationsDir, "nanovar.tar.gz")
+        code = subprocess.call(f"mkdir -p {annotationsDir}", shell=True)
+        if code != 0:
+            raise ValueError(f"Failed to create annotations folder: {annotationsDir}")
+        code = subprocess.call(f"wget -P {annotationsDir}/ {nanovarPath}", shell=True)
+        if code != 0:
+            raise ValueError(f"Download nanovar archive failed (exit code {code}). URL: {nanovarPath}")
+        if not os.path.isfile(nanovarArchive):
+            raise ValueError(f"Nanovar archive not found after download: {nanovarArchive}")
+        print("[4/7] Download nanovar archive OK")
+        
+        # Step 5: Untar nanovar
+        print("\n[5/7] Extracting nanovar archive...")
+        code = subprocess.call(
+            f"tar -xvf {nanovarArchive} -C {annotationsDir} && rm {nanovarArchive}",
+            shell=True
+        )
+        if code != 0:
+            raise ValueError(f"Untar nanovar folder failed (exit code {code}). Check git-lfs or download integrity.")
+        nanovarDir = os.path.join(annotationsDir, "nanovar")
+        if not os.path.isdir(nanovarDir):
+            raise ValueError(f"Nanovar folder not found after extraction: {nanovarDir}")
+        print("[5/7] Nanovar extraction OK")
+        
+        # Step 6: Set up Python virtual environment
+        print("\n[6/7] Setting up Python virtual environment...")
+        venvDir = os.path.join(gitDir, "venv")
+        
+        # Install virtualenv
+        code = subprocess.call("pip3 install virtualenv", shell=True)
+        if code != 0:
+            raise ValueError(f"Failed to install virtualenv (exit code {code})")
+        
+        # Create venv
+        code = subprocess.call(f"mkdir -p {venvDir} && python3 -m venv {venvDir}", shell=True)
+        if code != 0:
+            raise ValueError(f"Failed to create virtual environment at {venvDir} (exit code {code})")
+        if not os.path.isdir(venvDir):
+            raise ValueError(f"Virtual environment directory not created: {venvDir}")
+        
+        # Upgrade pip/wheel/setuptools
+        try:
+            subprocess.run(
+                ['bash', '-c', f"source {venvDir}/bin/activate && pip3 install --upgrade pip wheel setuptools"],
+                check=True
+            )
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"Failed to upgrade pip/wheel/setuptools: {e}")
+        
+        # Install snakemake and pandas
+        try:
+            subprocess.run(
+                ['bash', '-c', f"source {venvDir}/bin/activate && pip3 install snakemake pandas"],
+                check=True
+            )
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"Failed to install snakemake/pandas: {e}")
+        
+        # Verify snakemake is installed
+        snakemakeBin = os.path.join(venvDir, "bin", "snakemake")
+        if not os.path.isfile(snakemakeBin):
+            raise ValueError(f"Snakemake not found after installation: {snakemakeBin}")
+        print("[6/7] Python virtual environment setup OK")
+        
+        # Step 7: Retrieve snpEff annotations
+        print("\n[7/7] Retrieving snpEff annotations...")
+        snpEffZip = os.path.join(annotationsDir, "snpEff_v4_3_hg19.zip")
+        code = subprocess.call(f"wget -P {annotationsDir}/ {snpEffPath}", shell=True)
+        if code != 0:
+            raise ValueError(f"Failed to download snpEff annotations (exit code {code}). URL: {snpEffPath}")
+        if not os.path.isfile(snpEffZip):
+            raise ValueError(f"snpEff zip not found after download: {snpEffZip}")
+        
+        code = subprocess.call(f"cd {annotationsDir} && unzip -o {snpEffZip} && rm {snpEffZip}", shell=True)
+        if code != 0:
+            raise ValueError(f"Failed to unzip snpEff annotations (exit code {code})")
+        
+        snpEffDataDir = os.path.join(annotationsDir, "data")
+        if not os.path.isdir(snpEffDataDir):
+            raise ValueError(f"snpEff data directory not found after extraction: {snpEffDataDir}")
+        print("[7/7] snpEff annotations OK")
+        
+        # Installation complete
+        print("\n" + "=" * 60)
+        print("Installation completed successfully!")
+        print("=" * 60)
+        print(f"  Singularity images: {singularityFolder}")
+        print(f"  Virtual environment: {venvDir}")
+        print(f"  Annotations: {annotationsDir}")
+        print("\nNanoCliD is ready to use. Please run the test command to verify.")
+        print("=" * 60)
+        
+        
     def _runTest(self, refDir, profile, email, containersFolder, doradoModelsFolder):
         gitDir = os.path.dirname(os.path.realpath(__file__))
         print("Extracting data test folder...")
